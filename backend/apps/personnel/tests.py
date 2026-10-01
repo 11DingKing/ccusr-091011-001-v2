@@ -80,3 +80,22 @@ class StockOutPersonAPITest(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_invalid_pagination_is_business_error(self):
+        for params in ({"page": "0"}, {"page": "-1"}, {"page": "abc"}, {"page_size": "0"},
+                       {"page_size": "99999"}, {"page_size": "2.5"}):
+            with self.subTest(params=params):
+                response = self.client.get(self.url, params)
+                self.assertEqual(response.status_code, 400)
+                body = response.json()
+                self.assertFalse(body["success"])
+                self.assertIsNone(body["data"])
+
+    def test_valid_request_keeps_total(self):
+        StockOutPerson.objects.create(police_no="P1", name="甲", phone="13800000000")
+        StockOutPerson.objects.create(police_no="P2", name="乙", phone="13800000001")
+        response = self.client.get(self.url, {"page": "1", "page_size": "1"})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["total"], 2)
+        self.assertEqual(len(data["list"]), 1)

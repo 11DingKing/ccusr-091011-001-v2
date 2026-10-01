@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from apps.core.response import success_response, error_response
+from apps.core.pagination import paginate_queryset, pagination_payload
 from apps.authentication.models import User
 from .models import StockOutPerson
 from .serializers import (
@@ -22,23 +23,14 @@ class StockOutPersonListView(APIView):
     
     def get(self, request):
         queryset = StockOutPerson.objects.all().order_by('-created_at')
-        
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
-        start = (page - 1) * page_size
-        end = start + page_size
-        
-        total = queryset.count()
-        persons = queryset[start:end]
-        
+
+        persons, total, page, page_size = paginate_queryset(queryset, request.query_params)
+
         serializer = StockOutPersonSerializer(persons, many=True)
-        
-        return success_response(data={
-            'list': serializer.data,
-            'total': total,
-            'page': page,
-            'page_size': page_size
-        })
+
+        return success_response(
+            data=pagination_payload(serializer.data, total, page, page_size)
+        )
     
     def post(self, request):
         """创建出库人员"""

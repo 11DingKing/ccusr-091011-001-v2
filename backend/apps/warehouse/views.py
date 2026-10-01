@@ -10,6 +10,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from apps.core.response import success_response, error_response
+from apps.core.pagination import paginate_queryset, pagination_payload
 from .models import Unit, Category, Variety, Goods, StockIn, StockOut, Warning, Approval
 from .serializers import (
     UnitSerializer, UnitCreateSerializer,
@@ -30,23 +31,14 @@ class UnitListView(APIView):
     
     def get(self, request):
         queryset = Unit.objects.all().order_by('-created_at')
-        
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
-        start = (page - 1) * page_size
-        end = start + page_size
-        
-        total = queryset.count()
-        units = queryset[start:end]
-        
+
+        units, total, page, page_size = paginate_queryset(queryset, request.query_params)
+
         serializer = UnitSerializer(units, many=True)
-        
-        return success_response(data={
-            'list': serializer.data,
-            'total': total,
-            'page': page,
-            'page_size': page_size
-        })
+
+        return success_response(
+            data=pagination_payload(serializer.data, total, page, page_size)
+        )
     
     def post(self, request):
         """创建单位"""
@@ -148,23 +140,14 @@ class CategoryListView(APIView):
     
     def get(self, request):
         queryset = Category.objects.all().order_by('-created_at')
-        
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
-        start = (page - 1) * page_size
-        end = start + page_size
-        
-        total = queryset.count()
-        categories = queryset[start:end]
-        
+
+        categories, total, page, page_size = paginate_queryset(queryset, request.query_params)
+
         serializer = CategorySerializer(categories, many=True)
-        
-        return success_response(data={
-            'list': serializer.data,
-            'total': total,
-            'page': page,
-            'page_size': page_size
-        })
+
+        return success_response(
+            data=pagination_payload(serializer.data, total, page, page_size)
+        )
     
     def post(self, request):
         """创建品类"""
@@ -268,23 +251,14 @@ class VarietyListView(APIView):
     
     def get(self, request):
         queryset = Variety.objects.all().order_by('-created_at')
-        
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
-        start = (page - 1) * page_size
-        end = start + page_size
-        
-        total = queryset.count()
-        varieties = queryset[start:end]
-        
+
+        varieties, total, page, page_size = paginate_queryset(queryset, request.query_params)
+
         serializer = VarietySerializer(varieties, many=True)
-        
-        return success_response(data={
-            'list': serializer.data,
-            'total': total,
-            'page': page,
-            'page_size': page_size
-        })
+
+        return success_response(
+            data=pagination_payload(serializer.data, total, page, page_size)
+        )
     
     def post(self, request):
         """创建品种"""

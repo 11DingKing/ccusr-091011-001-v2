@@ -242,6 +242,73 @@ class OperationLogTest(TestCase):
             action='create',
             module='货物管理'
         )
-        
+
         self.assertIn('loguser', str(log))
         self.assertIn('create', str(log))
+
+
+class UserListPaginationTest(APITestCase):
+    """用户列表分页边界（管理员视角）"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            username='page-admin', password='adminpass123', role='admin'
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {generate_token(self.admin)}')
+        User.objects.create_user(username='member-1', password='x')
+        User.objects.create_user(username='member-2', password='x')
+
+    def test_invalid_pagination_is_business_error(self):
+        for params in ({'page': '0'}, {'page': '-3'}, {'page': 'abc'},
+                       {'page_size': '0'}, {'page_size': '200'}, {'page_size': 'x'}):
+            with self.subTest(params=params):
+                response = self.client.get('/api/auth/users/', params)
+                self.assertEqual(response.status_code, 400)
+                self.assertFalse(response.json()['success'])
+
+    def test_valid_request_keeps_total(self):
+        response = self.client.get('/api/auth/users/', {'page': '1', 'page_size': '2'})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()['data']
+        self.assertEqual(data['total'], 3)
+        self.assertEqual(len(data['list']), 2)
+        # 排序仍为 created_at 倒序
+        self.assertEqual(data['list'][0]['username'], 'member-2')
+
+
+class OperationLogPaginationTest(APITestCase):
+    """审计日志列表分页边界"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='log-page-user', password='x')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {generate_token(self.user)}')
+        for i in range(3):
+            OperationLog.objects.create(
+                user=self.user, action='login', module='认证管理', detail=f'event-{i}'
+            )
+
+    def test_invalid_pagination_is_business_error(self):
+        for params in ({'page': '0'}, {'page': '-1'}, {'page': 'nan'},
+                       {'page_size': '-5'}, {'page_size': '101'}, {'page_size': '1.2'}):
+            with self.subTest(params=params):
+                response = self.client.get('/api/auth/logs/', params)
+                self.assertEqual(response.status_code, 400)
+                body = response.json()
+                self.assertFalse(body['success'])
+                self.assertEqual(body['code'], 400)
+
+    def test_valid_request_keeps_total_and_filter(self):
+        response = self.client.get('/api/auth/logs/', {'page': '1', 'page_size': '2'})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()['data']
+        self.assertEqual(data['total'], 3)
+        self.assertEqual(len(data['list']), 2)
+
+    def test_bad_page_then_good_page_in_same_session(self):
+        bad = self.client.get('/api/auth/logs/', {'page': '0'})
+        good = self.client.get('/api/auth/logs/', {'page': '1'})
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(good.status_code, 200)
+        self.assertEqual(good.json()['data']['total'], 3)

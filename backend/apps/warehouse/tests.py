@@ -90,3 +90,75 @@ class WarehouseAPITest(WarehouseFixture):
     def test_requires_authentication(self):
         anonymous = APIClient().get("/api/units/")
         self.assertEqual(anonymous.status_code, 401)
+
+
+class PaginationBoundaryTest(WarehouseFixture):
+    """单位/品类/品种列表共用同一套分页边界语义"""
+
+    ENDPOINTS = ["/api/units/", "/api/categories/", "/api/varieties/"]
+
+    def _assert_business_error(self, response):
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        self.assertFalse(body["success"])
+        self.assertEqual(body["code"], 400)
+        self.assertIsNone(body["data"])
+        return body["message"]
+
+    def test_zero_and_negative_page_rejected_on_every_endpoint(self):
+        for endpoint in self.ENDPOINTS:
+            for value in ("0", "-1"):
+                with self.subTest(endpoint=endpoint, value=value):
+                    response = self.client.get(endpoint, {"page": value})
+                    self._assert_business_error(response)
+
+    def test_non_numeric_params_rejected_on_every_endpoint(self):
+        for endpoint in self.ENDPOINTS:
+            for params in ({"page": "abc"}, {"page_size": "1.5"}, {"page": "0x2"}):
+                with self.subTest(endpoint=endpoint, params=params):
+                    self.assertEqual(self.client.get(endpoint, params).status_code, 400)
+
+    def test_page_size_over_limit_rejected(self):
+        for endpoint in self.ENDPOINTS:
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(
+                    self.client.get(endpoint, {"page_size": "101"}).status_code, 400
+                )
+
+    def test_does_not_swallow_into_empty_list(self):
+        # 非法入参必须是业务错误，而不是被吞掉后返回空列表
+        response = self.client.get("/api/units/", {"page": "abc"})
+        self._assert_business_error(response)
+        self.assertEqual(Unit.objects.count(), 1)
+
+    def test_valid_pagination_keeps_total_and_ordering(self):
+        for i in range(3):
+            Unit.objects.create(name=f"单位{i}", created_by=self.user)
+
+        response = self.client.get("/api/units/", {"page": "1", "page_size": "2"})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["total"], 4)
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["page_size"], 2)
+        self.assertEqual(len(data["list"]), 2)
+        # 排序仍为 created_at 倒序：最新创建的在前
+        self.assertEqual(data["list"][0]["name"], "单位2")
+
+        page_two = self.client.get("/api/units/", {"page": "2", "page_size": "2"})
+        names = [item["name"] for item in page_two.json()["data"]["list"]]
+        self.assertEqual(names, ["单位0", "件"])
+
+    def test_page_beyond_range_is_valid_empty_page_with_real_total(self):
+        response = self.client.get("/api/units/", {"page": "99"})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["list"], [])
+        self.assertEqual(data["total"], 1)
+
+    def test_invalid_page_does_not_affect_subsequent_valid_requests(self):
+        bad = self.client.get("/api/units/", {"page": "-5"})
+        self.assertEqual(bad.status_code, 400)
+        good = self.client.get("/api/units/", {"page": "1"})
+        self.assertEqual(good.status_code, 200)
+        self.assertEqual(good.json()["data"]["total"], 1)
