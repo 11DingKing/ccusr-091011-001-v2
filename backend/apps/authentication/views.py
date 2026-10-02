@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
 from apps.core.response import success_response, error_response
+from apps.core.pagination import paginate_queryset
 from .models import User, OperationLog
 from .serializers import LoginSerializer, UserSerializer, OperationLogSerializer, UserCreateSerializer
 from .backends import generate_token
@@ -83,15 +84,9 @@ class UserListView(APIView):
             return error_response(message='无权限访问', code=403)
         
         queryset = User.objects.all().order_by('-created_at')
-        
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
-        start = (page - 1) * page_size
-        end = start + page_size
-        
-        total = queryset.count()
-        users = queryset[start:end]
-        
+
+        users, total, page, page_size = paginate_queryset(queryset, request.query_params)
+
         serializer = UserSerializer(users, many=True)
         
         return success_response(data={
@@ -208,15 +203,9 @@ class OperationLogListView(APIView):
         
         filterset = OperationLogFilter(request.query_params, queryset=queryset)
         queryset = filterset.qs
-        
-        page = int(request.query_params.get('page', 1))
-        page_size = int(request.query_params.get('page_size', 10))
-        start = (page - 1) * page_size
-        end = start + page_size
-        
-        total = queryset.count()
-        logs = queryset[start:end]
-        
+
+        logs, total, page, page_size = paginate_queryset(queryset, request.query_params)
+
         serializer = OperationLogSerializer(logs, many=True)
         
         return success_response(data={

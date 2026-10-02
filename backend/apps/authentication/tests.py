@@ -2,8 +2,10 @@
 认证模块测试用例
 """
 import json
+from datetime import timedelta
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
 from .models import User, OperationLog
@@ -242,6 +244,58 @@ class OperationLogTest(TestCase):
             action='create',
             module='货物管理'
         )
-        
+
         self.assertIn('loguser', str(log))
         self.assertIn('create', str(log))
+
+
+class OperationLogAPITest(APITestCase):
+    """操作日志列表分页测试"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='audituser',
+            password='auditpass123',
+            role='admin'
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {generate_token(self.user)}')
+        self.url = '/api/auth/logs/'
+        base = timezone.now()
+        for i in range(3):
+            log = OperationLog.objects.create(
+                user=self.user,
+                action='login',
+                module='认证管理',
+                detail=f'第{i}次登录'
+            )
+            # 固定创建时间，保证倒序排列确定
+            OperationLog.objects.filter(pk=log.pk).update(
+                created_at=base - timedelta(hours=3 - i)
+            )
+
+    def test_list_rejects_invalid_pagination(self):
+        """非法分页参数返回稳定的业务错误而非500"""
+        for query in ('page=0', 'page=-1', 'page=abc', 'page_size=0', 'page_size=-2', 'page_size=500'):
+            response = self.client.get(f'{self.url}?{query}')
+            self.assertEqual(response.status_code, 400, query)
+            body = response.json()
+            self.assertFalse(body['success'])
+            self.assertEqual(body['code'], 400)
+            self.assertTrue(body['message'])
+
+    def test_list_pagination_keeps_order_and_total(self):
+        """合法请求的分页、排序与总数不变"""
+        response = self.client.get(f'{self.url}?page=2&page_size=2')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()['data']
+        self.assertEqual(data['total'], 3)
+        self.assertEqual(data['page'], 2)
+        self.assertEqual(data['page_size'], 2)
+        self.assertEqual(len(data['list']), 1)
+
+        first_page = self.client.get(f'{self.url}?page=1&page_size=2').json()['data']
+        self.assertEqual(len(first_page['list']), 2)
+        # 默认按创建时间倒序，最新日志在最前
+        self.assertEqual(first_page['list'][0]['detail'], '第2次登录')

@@ -1,7 +1,9 @@
 from decimal import Decimal
+from datetime import timedelta
 
 from django.db import IntegrityError
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.authentication.backends import generate_token
@@ -90,3 +92,44 @@ class WarehouseAPITest(WarehouseFixture):
     def test_requires_authentication(self):
         anonymous = APIClient().get("/api/units/")
         self.assertEqual(anonymous.status_code, 401)
+
+    def test_list_units_rejects_invalid_pagination(self):
+        for query in ("page=0", "page=-1", "page=abc", "page_size=0", "page_size=-5", "page_size=101"):
+            response = self.client.get(f"/api/units/?{query}")
+            self.assertEqual(response.status_code, 400, query)
+            body = response.json()
+            self.assertFalse(body["success"])
+            self.assertEqual(body["code"], 400)
+            self.assertTrue(body["message"])
+
+    def test_list_categories_rejects_invalid_pagination(self):
+        for query in ("page=0", "page=-2", "page=xyz", "page_size=0", "page_size=9999"):
+            response = self.client.get(f"/api/categories/?{query}")
+            self.assertEqual(response.status_code, 400, query)
+            self.assertFalse(response.json()["success"])
+
+    def test_list_units_pagination_keeps_order_and_total(self):
+        base = timezone.now()
+        # 固定创建时间，保证倒序排列确定
+        Unit.objects.filter(pk=self.unit.pk).update(created_at=base - timedelta(hours=3))
+        for i, name in enumerate(("箱", "台")):
+            unit = Unit.objects.create(name=name, created_by=self.user)
+            Unit.objects.filter(pk=unit.pk).update(created_at=base - timedelta(hours=2 - i))
+
+        first = self.client.get("/api/units/?page=1&page_size=2")
+        second = self.client.get("/api/units/?page=2&page_size=2")
+
+        self.assertEqual(first.status_code, 200)
+        data = first.json()["data"]
+        self.assertEqual(data["total"], 3)
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["page_size"], 2)
+        self.assertEqual(len(data["list"]), 2)
+        # 排序保持创建时间倒序，最新创建的“台”在最前
+        self.assertEqual(data["list"][0]["name"], "台")
+        self.assertEqual(data["list"][1]["name"], "箱")
+
+        self.assertEqual(second.status_code, 200)
+        second_data = second.json()["data"]
+        self.assertEqual(second_data["total"], 3)
+        self.assertEqual([item["name"] for item in second_data["list"]], ["件"])

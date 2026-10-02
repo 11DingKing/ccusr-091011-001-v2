@@ -1,4 +1,7 @@
+from datetime import timedelta
+
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.authentication.backends import generate_token
@@ -80,3 +83,32 @@ class StockOutPersonAPITest(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_list_rejects_invalid_pagination(self):
+        for query in ("page=0", "page=-3", "page=abc", "page_size=0", "page_size=-1", "page_size=1000"):
+            response = self.client.get(f"{self.url}?{query}")
+            self.assertEqual(response.status_code, 400, query)
+            body = response.json()
+            self.assertFalse(body["success"])
+            self.assertEqual(body["code"], 400)
+
+    def test_list_pagination_keeps_order_and_total(self):
+        base = timezone.now()
+        for i, no in enumerate(("OUT010", "OUT011", "OUT012")):
+            person = StockOutPerson.objects.create(
+                police_no=no, name=f"警员{no}", phone=f"1380013801{i}"
+            )
+            # 固定创建时间，保证倒序排列确定
+            StockOutPerson.objects.filter(pk=person.pk).update(
+                created_at=base - timedelta(hours=3 - i)
+            )
+
+        response = self.client.get(f"{self.url}?page=2&page_size=2")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["total"], 3)
+        self.assertEqual(data["page"], 2)
+        self.assertEqual(data["page_size"], 2)
+        # 排序保持创建时间倒序，第二页只剩最早创建的一条
+        self.assertEqual([item["police_no"] for item in data["list"]], ["OUT010"])

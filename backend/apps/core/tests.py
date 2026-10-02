@@ -5,8 +5,13 @@ from django.test import TestCase
 from rest_framework.test import APITestCase
 from rest_framework import status
 from .exceptions import (
-    BusinessException, AuthenticationException, 
-    PermissionException, NotFoundException
+    BusinessException, AuthenticationException,
+    PermissionException, NotFoundException, InvalidParameterException,
+    custom_exception_handler
+)
+from .pagination import (
+    parse_pagination_params, paginate_queryset,
+    DEFAULT_PAGE, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 )
 from .response import success_response, error_response, created_response, deleted_response
 
@@ -72,6 +77,92 @@ class ResponseTest(TestCase):
         
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data['success'])
+
+
+class PaginationTest(TestCase):
+    """分页参数校验测试"""
+
+    def test_default_params(self):
+        """缺省参数使用默认值"""
+        self.assertEqual(parse_pagination_params({}), (DEFAULT_PAGE, DEFAULT_PAGE_SIZE))
+
+    def test_empty_params_use_default(self):
+        """空串参数视为未提供"""
+        self.assertEqual(
+            parse_pagination_params({'page': '', 'page_size': ''}),
+            (DEFAULT_PAGE, DEFAULT_PAGE_SIZE)
+        )
+
+    def test_valid_params(self):
+        """合法参数原样解析"""
+        self.assertEqual(parse_pagination_params({'page': '2', 'page_size': '20'}), (2, 20))
+
+    def test_non_numeric_params_rejected(self):
+        """非数字参数抛出业务异常"""
+        for params in ({'page': 'abc'}, {'page_size': '1.5'}, {'page': '1x'}):
+            with self.assertRaises(InvalidParameterException):
+                parse_pagination_params(params)
+
+    def test_zero_and_negative_page_rejected(self):
+        """页码为 0 或负数时抛出业务异常"""
+        for bad in ('0', '-1', '-100'):
+            with self.assertRaises(InvalidParameterException):
+                parse_pagination_params({'page': bad})
+
+    def test_zero_and_negative_page_size_rejected(self):
+        """页尺寸为 0 或负数时抛出业务异常"""
+        for bad in ('0', '-5'):
+            with self.assertRaises(InvalidParameterException):
+                parse_pagination_params({'page_size': bad})
+
+    def test_oversized_page_size_rejected(self):
+        """页尺寸超过上限抛出业务异常，上限值本身合法"""
+        with self.assertRaises(InvalidParameterException):
+            parse_pagination_params({'page_size': str(MAX_PAGE_SIZE + 1)})
+        _, page_size = parse_pagination_params({'page_size': str(MAX_PAGE_SIZE)})
+        self.assertEqual(page_size, MAX_PAGE_SIZE)
+
+    def test_paginate_queryset_keeps_order_and_total(self):
+        """分页不改变排序与总数"""
+        from apps.authentication.models import User
+        for name in ('u1', 'u2', 'u3'):
+            User.objects.create_user(username=name, password='pass12345')
+        queryset = User.objects.filter(username__in=('u1', 'u2', 'u3')).order_by('username')
+
+        items, total, page, page_size = paginate_queryset(queryset, {'page': '2', 'page_size': '2'})
+
+        self.assertEqual(total, 3)
+        self.assertEqual((page, page_size), (2, 2))
+        self.assertEqual([u.username for u in items], ['u3'])
+
+    def test_paginate_queryset_rejects_invalid_params(self):
+        """分页helper对非法参数抛出业务异常而非返回空列表"""
+        from apps.authentication.models import User
+        with self.assertRaises(InvalidParameterException):
+            paginate_queryset(User.objects.all(), {'page': '0'})
+
+
+class ExceptionHandlerLoggingTest(TestCase):
+    """异常处理器日志级别测试：用户输入错误与服务器异常应可区分"""
+
+    def test_business_exception_logged_as_warning(self):
+        """业务异常记录 WARNING，不记录堆栈"""
+        with self.assertLogs('apps', level='WARNING') as captured:
+            response = custom_exception_handler(BusinessException('页码必须大于 0'), None)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['message'], '页码必须大于 0')
+        self.assertEqual(len(captured.records), 1)
+        self.assertEqual(captured.records[0].levelname, 'WARNING')
+        self.assertIsNone(captured.records[0].exc_info)
+
+    def test_unhandled_exception_logged_as_error(self):
+        """未捕获异常记录 ERROR 并附堆栈"""
+        with self.assertLogs('apps', level='ERROR') as captured:
+            response = custom_exception_handler(RuntimeError('boom'), None)
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(len(captured.records), 1)
+        self.assertEqual(captured.records[0].levelname, 'ERROR')
+        self.assertIsNotNone(captured.records[0].exc_info)
 
 
 class LoggingConfigTest(TestCase):
